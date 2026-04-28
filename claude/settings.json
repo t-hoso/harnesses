@@ -24,6 +24,10 @@
           {
             "type": "command",
             "command": "~/.claude/hooks/warn-git-checkout.sh"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/check-commit-message.py"
           }
         ]
       }
