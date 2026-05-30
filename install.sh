@@ -85,11 +85,19 @@ jq -n --slurpfile e "$EXISTING" --slurpfile p "$PAYLOAD_SETTINGS" '
       .hooks[$ev] = ((($e.hooks[$ev] // []) + ($p.hooks[$ev] // [])) | uniq))
 ' > "$MERGED"
 
+# Content directories copied verbatim (no path rewrite needed): markdown that
+# Claude Code auto-discovers. Add new ones here and they deploy automatically.
+CONTENT_DIRS="commands skills"
+
 # Show plan.
 echo
 echo "Files to copy into $TARGET/hooks/:"
 for f in "$SRC"/hooks/*; do echo "  $(basename "$f")"; done
 echo "File to copy: $TARGET/CLAUDE.md"
+for d in $CONTENT_DIRS; do
+  [ -d "$SRC/$d" ] || continue
+  echo "Directory to sync: $TARGET/$d/ ($(find "$SRC/$d" -type f | wc -l | tr -d ' ') files)"
+done
 echo
 echo "settings.json diff (current -> merged):"
 diff <(jq -S . "$EXISTING") <(jq -S . "$MERGED") || true
@@ -111,6 +119,12 @@ mkdir -p "$TARGET/hooks"
 cp "$SRC"/hooks/* "$TARGET/hooks/"
 chmod +x "$TARGET"/hooks/*.sh "$TARGET"/hooks/*.py 2>/dev/null || true
 cp "$SRC/CLAUDE.md" "$TARGET/CLAUDE.md"
+
+for d in $CONTENT_DIRS; do
+  [ -d "$SRC/$d" ] || continue
+  mkdir -p "$TARGET/$d"
+  cp -R "$SRC/$d/." "$TARGET/$d/"
+done
 
 if [ -f "$TARGET/settings.json" ]; then
   cp "$TARGET/settings.json" "$TARGET/settings.json.bak.$(date +%Y%m%d%H%M%S)"
