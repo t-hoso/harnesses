@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Tests for the commit-time review hook. The independent reviewer is stubbed via
+# Tests for the staging-time review hook. The independent reviewer is stubbed via
 # REVIEW_CMD so these run offline and deterministically; only the hook's own
-# logic (commit detection, diff selection, PASS/FAIL parsing, fail-open) is under
-# test. Run: bash tests/review-before-commit.test.sh
+# logic (git add detection, staged-diff selection, PASS/FAIL parsing, fail-open)
+# is under test. Run: bash tests/review-before-commit.test.sh
 set -uo pipefail
 
 HOOK="$(cd "$(dirname "$0")/.." && pwd)/claude/hooks/review-before-commit.sh"
@@ -27,43 +27,52 @@ new_repo() {
 
 stub() { s="$(mktemp)"; printf '%s\n' "$1" > "$s"; printf '%s' "$s"; }
 
-# 1. Reviewer reports a violation on staged diff -> hook blocks the commit.
+# The hook runs as a PostToolUse hook, i.e. after `git add` has staged the
+# change, so each case stages first and then invokes the hook.
+
+# 1. Reviewer reports a violation on the staged diff -> block with findings.
 d="$(new_repo)"; printf 'orig\nnew\n' > "$d/f.txt"; git -C "$d" add f.txt
 s="$(stub 'REVIEW: FAIL
 - f.txt: 不要な否定コメント')"
-out="$(cd "$d" && TOOL_INPUT='{"command":"git commit -m x"}' REVIEW_CMD="cat $s" bash "$HOOK")"
-check "violation blocks commit"        'printf "%s" "$out" | grep -q "\"decision\": \"block\""'
+out="$(cd "$d" && TOOL_INPUT='{"command":"git add f.txt"}' REVIEW_CMD="cat $s" bash "$HOOK")"
+check "violation blocks staging"       'printf "%s" "$out" | grep -q "\"decision\": \"block\""'
 check "block reason carries findings"  'printf "%s" "$out" | grep -q "不要な否定コメント"'
 
-# 2. Reviewer passes -> hook is silent and the commit proceeds.
+# 2. Reviewer passes -> hook is silent.
 d="$(new_repo)"; printf 'orig\nnew\n' > "$d/f.txt"; git -C "$d" add f.txt
 s="$(stub 'REVIEW: PASS')"
-out="$(cd "$d" && TOOL_INPUT='{"command":"git commit -m x"}' REVIEW_CMD="cat $s" bash "$HOOK")"
+out="$(cd "$d" && TOOL_INPUT='{"command":"git add f.txt"}' REVIEW_CMD="cat $s" bash "$HOOK")"
 check "pass produces no block"         '! printf "%s" "$out" | grep -q "block"'
 
-# 3. Non-commit command is ignored (reviewer never consulted).
+# 3. Non-add command is ignored (reviewer never consulted).
 d="$(new_repo)"; printf 'orig\nnew\n' > "$d/f.txt"; git -C "$d" add f.txt
 s="$(stub 'REVIEW: FAIL')"
 out="$(cd "$d" && TOOL_INPUT='{"command":"git status"}' REVIEW_CMD="cat $s" bash "$HOOK")"
 check "git status skipped"             '[ -z "$out" ]'
 
-# 4. Nothing staged -> nothing to review, hook stays silent.
-d="$(new_repo)"
+# 4. Plain commit is no longer gated -> the review happens at add time instead.
+d="$(new_repo)"; printf 'orig\nnew\n' > "$d/f.txt"; git -C "$d" add f.txt
 s="$(stub 'REVIEW: FAIL')"
 out="$(cd "$d" && TOOL_INPUT='{"command":"git commit -m x"}' REVIEW_CMD="cat $s" bash "$HOOK")"
+check "git commit skipped"             '[ -z "$out" ]'
+
+# 5. Nothing staged -> nothing to review, hook stays silent.
+d="$(new_repo)"
+s="$(stub 'REVIEW: FAIL')"
+out="$(cd "$d" && TOOL_INPUT='{"command":"git add ."}' REVIEW_CMD="cat $s" bash "$HOOK")"
 check "empty staged diff skipped"      '[ -z "$out" ]'
 
-# 5. Reviewer error/timeout -> fail open (do not brick the commit).
+# 6. Reviewer error/timeout -> fail open (do not brick staging).
 d="$(new_repo)"; printf 'orig\nnew\n' > "$d/f.txt"; git -C "$d" add f.txt
-out="$(cd "$d" && TOOL_INPUT='{"command":"git commit -m x"}' REVIEW_CMD="false" bash "$HOOK")"
+out="$(cd "$d" && TOOL_INPUT='{"command":"git add f.txt"}' REVIEW_CMD="false" bash "$HOOK")"
 check "reviewer failure fails open"    '[ -z "$out" ]'
 
-# 6. -a commits tracked-but-unstaged changes -> reviewed via diff HEAD.
-d="$(new_repo)"; printf 'orig\nnew\n' > "$d/f.txt"   # modified, NOT staged
+# 7. A newly added (previously untracked) file is reviewed via the staged diff.
+d="$(new_repo)"; printf '# no longer used\nx=1\n' > "$d/new.txt"; git -C "$d" add new.txt
 s="$(stub 'REVIEW: FAIL
-- f.txt: 違反')"
-out="$(cd "$d" && TOOL_INPUT='{"command":"git commit -am x"}' REVIEW_CMD="cat $s" bash "$HOOK")"
-check "-am reviews unstaged tracked"   'printf "%s" "$out" | grep -q "\"decision\": \"block\""'
+- new.txt: 違反')"
+out="$(cd "$d" && TOOL_INPUT='{"command":"git add new.txt"}' REVIEW_CMD="cat $s" bash "$HOOK")"
+check "new file reviewed via --cached" 'printf "%s" "$out" | grep -q "\"decision\": \"block\""'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

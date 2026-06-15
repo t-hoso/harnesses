@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# PreToolUse(Bash) hook: before a `git commit` runs, send the changes that are
-# about to be committed to an independent reviewer (a separate `claude -p`
-# session) and wait for its verdict. If the reviewer flags a violation the commit
-# is blocked and the findings are handed back so they can be fixed first.
+# PostToolUse(Bash) hook: after a `git add` stages changes, send the staged set
+# to an independent reviewer (a separate `claude -p` session) and wait for its
+# verdict. If the reviewer flags a violation the staging is rejected and the
+# findings are handed back so they can be fixed before committing.
 #
-# The reviewer is a real, fresh-context model — not this session reviewing its
-# own work — which is why the verdict is trustworthy enough to gate on.
+# Reviewing at `git add` (not `git commit`) catches issues one step earlier, and
+# reviewing the staged diff means brand-new files are covered too. The reviewer
+# is a real, fresh-context model — not this session grading its own work — which
+# is why the verdict is trustworthy enough to gate on.
 #
 # Tunables (env): REVIEW_CMD (reviewer invocation, prompt on stdin),
 # REVIEW_TIMEOUT (seconds). Any reviewer error or timeout fails OPEN so a flaky
-# reviewer never bricks committing.
+# reviewer never blocks staging.
 set -uo pipefail
 
 # Don't review the reviewer: the spawned session inherits this guard.
@@ -18,17 +20,11 @@ set -uo pipefail
 RAW="${TOOL_INPUT:-}"; [ -n "$RAW" ] || RAW='{}'
 CMD="$(printf '%s' "$RAW" | jq -r '.command // ""')"
 case "$CMD" in
-  *"git commit"*) ;;
+  *"git add"*) ;;
   *) exit 0 ;;
 esac
 
-# `-a`/`-am`/`--all` commit tracked changes that aren't staged yet, so review the
-# whole working tree against HEAD; otherwise review exactly what's staged.
-if printf '%s' "$CMD" | grep -Eq '(^|[[:space:]])-([a-z]*a[a-z]*)([[:space:]]|$)|--all'; then
-  DIFF="$(git diff HEAD 2>/dev/null || true)"
-else
-  DIFF="$(git diff --cached 2>/dev/null || true)"
-fi
+DIFF="$(git diff --cached 2>/dev/null || true)"
 [ -n "$DIFF" ] || exit 0
 
 # Keep the prompt bounded on large changes.
@@ -68,10 +64,10 @@ $DIFF
 REVIEW_CMD="${REVIEW_CMD:-claude -p --model claude-haiku-4-5-20251001}"
 OUT="$(printf '%s' "$PROMPT" | CLAUDE_REVIEW_IN_PROGRESS=1 timeout "${REVIEW_TIMEOUT:-120}" $REVIEW_CMD 2>/dev/null || true)"
 
-# Only an explicit FAIL blocks; empty/garbled/PASS all let the commit through.
+# Only an explicit FAIL blocks; empty/garbled/PASS all let staging through.
 if printf '%s' "$OUT" | grep -q 'REVIEW: FAIL'; then
   FINDINGS="$(printf '%s' "$OUT" | grep -v 'REVIEW: FAIL')"
-  REASON="コミット前レビューで指摘がありました。修正してから再コミットしてください。
+  REASON="ステージ前レビューで指摘がありました。コメントを直してから再度 git add してください。
 背景説明として本当に必要なコメントは、上の判断テストに照らして残して構いません。
 
 $FINDINGS"

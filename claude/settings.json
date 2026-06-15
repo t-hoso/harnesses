@@ -39,11 +39,18 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/check-commit-message.py"
-          },
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/review-before-commit.sh",
-            "statusMessage": "Reviewing changes before commit..."
+            "statusMessage": "Reviewing staged changes..."
           }
         ]
       }
