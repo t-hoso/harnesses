@@ -39,6 +39,11 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/check-commit-message.py"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/review-before-commit.sh",
+            "statusMessage": "Reviewing changes before commit..."
           }
         ]
       }
